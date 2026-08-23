@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">Yimly TV</string>
+    <string name="title_yimly">YIMLY</string>
+    <string name="status_starting">Starting…</string>
+    <string name="status_connecting">Connecting to Yimly server…</string>
+    <string name="action_retry">Retry Now</string>
+    <string name="label_session">Session: %1$s</string>
+</resources>

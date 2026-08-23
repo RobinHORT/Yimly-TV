@@ -1,0 +1,6 @@
+{
+  "name": "Yimly TV",
+  "description": "Dedicated full-screen Android TV host room display for Yimly karaoke.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
