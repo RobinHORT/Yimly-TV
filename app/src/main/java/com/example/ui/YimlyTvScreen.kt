@@ -58,44 +58,45 @@ import com.example.R
 import com.example.ui.theme.YimlyDarkBg
 import com.example.ui.theme.YimlyPink
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+
 @Composable
 fun YimlyTvScreen(
-    uiState: YimlyUiState,
-    onRetry: () -> Unit,
+    url: String,
     modifier: Modifier = Modifier
 ) {
+    var showExitDialog by remember { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    BackHandler {
+        showExitDialog = true
+    }
+
+    if (showExitDialog) {
+        AlertDialog(
+            onDismissRequest = { showExitDialog = false },
+            title = { Text("Exit Yimly-TV?") },
+            text = { Text("Are you sure you want to close the app?") },
+            confirmButton = {
+                TextButton(onClick = { (context as? android.app.Activity)?.finish() }) {
+                    Text("Close app")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExitDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     Surface(
         modifier = modifier.fillMaxSize(),
         color = YimlyDarkBg
     ) {
-        AnimatedContent(
-            targetState = uiState,
-            transitionSpec = {
-                fadeIn(animationSpec = tween(350)) togetherWith
-                    fadeOut(animationSpec = tween(350))
-            },
-            label = "YimlyTvStateTransition"
-        ) { state ->
-            when (state) {
-                is YimlyUiState.Loading -> {
-                    YimlyTvSplashScreen(
-                        statusText = stringResource(R.string.status_starting),
-                        isRetrying = false
-                    )
-                }
-                is YimlyUiState.Error -> {
-                    YimlyTvErrorScreen(
-                        retryCountdown = state.retryCountdown,
-                        onRetry = onRetry
-                    )
-                }
-                is YimlyUiState.Ready -> {
-                    YimlyHostRoomContainer(
-                        hostRoomUrl = state.hostRoomUrl
-                    )
-                }
-            }
-        }
+        YimlyHostRoomContainer(hostRoomUrl = url)
     }
 }
 

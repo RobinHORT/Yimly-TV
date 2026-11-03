@@ -26,9 +26,7 @@ import com.example.ui.theme.MyApplicationTheme
 
 class MainActivity : ComponentActivity() {
 
-    private val viewModel: YimlyViewModel by viewModels {
-        YimlyViewModel.Factory()
-    }
+    private val viewModel: YimlyViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -45,16 +43,13 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MyApplicationTheme(darkTheme = true) {
-                val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+                val url by viewModel.uiState.collectAsStateWithLifecycle()
 
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = Color(0xFF0C0A17)
                 ) {
-                    YimlyTvScreen(
-                        uiState = uiState,
-                        onRetry = { viewModel.retryImmediately() }
-                    )
+                    YimlyTvScreen(url = url)
                 }
             }
         }
@@ -64,6 +59,8 @@ class MainActivity : ComponentActivity() {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {
             hideSystemUI()
+        } else {
+            // App is no longer in focus
         }
     }
 

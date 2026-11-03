@@ -38,6 +38,7 @@ fun YimlyHostRoomWebView(
     onError: (description: String) -> Unit = {}
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     val webView = remember(context) {
         createConfiguredWebView(
             context = context,
@@ -45,6 +46,20 @@ fun YimlyHostRoomWebView(
             onPageFinished = onPageFinished,
             onError = onError
         )
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> webView.onPause()
+                androidx.lifecycle.Lifecycle.Event.ON_RESUME -> webView.onResume()
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
     }
 
     DisposableEffect(url) {
