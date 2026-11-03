@@ -10,6 +10,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
+import com.example.BuildConfig
 
 interface YimlySessionService {
     suspend fun createNewSession(): Result<YimlySessionInfo>
@@ -49,6 +50,7 @@ class YimlySessionServiceImpl(
             .header("Accept", "application/json")
             .header("Content-Type", "application/json")
             .header("User-Agent", "YimlyTV/1.0 (Android TV; Leanback)")
+            .header("Authorization", "Bearer ${BuildConfig.YIMLY_API_KEY}")
             .build()
 
         try {
