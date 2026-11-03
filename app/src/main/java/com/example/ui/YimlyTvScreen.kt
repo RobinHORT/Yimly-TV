@@ -58,9 +58,15 @@ import com.example.R
 import com.example.ui.theme.YimlyDarkBg
 import com.example.ui.theme.YimlyPink
 
+import android.app.Activity
+import android.webkit.WebView
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.TextButton
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun YimlyTvScreen(
@@ -68,25 +74,43 @@ fun YimlyTvScreen(
     modifier: Modifier = Modifier
 ) {
     var showExitDialog by remember { mutableStateOf(false) }
+    var isExiting by remember { mutableStateOf(false) }
+    var webViewRef by remember { mutableStateOf<WebView?>(null) }
     val context = androidx.compose.ui.platform.LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
 
-    BackHandler {
-        showExitDialog = true
+    // Handle Back action from phone/tablet back gestures and system buttons
+    BackHandler(enabled = !isExiting) {
+        if (showExitDialog) {
+            showExitDialog = false
+        } else if (webViewRef?.canGoBack() == true) {
+            webViewRef?.goBack()
+        } else {
+            showExitDialog = true
+        }
     }
 
     if (showExitDialog) {
-        AlertDialog(
-            onDismissRequest = { showExitDialog = false },
-            title = { Text("Exit Yimly-TV?") },
-            text = { Text("Are you sure you want to close the app?") },
-            confirmButton = {
-                TextButton(onClick = { (context as? android.app.Activity)?.finish() }) {
-                    Text("Close app")
+        YimlyExitDialog(
+            isExiting = isExiting,
+            onDismiss = {
+                if (!isExiting) {
+                    showExitDialog = false
                 }
             },
-            dismissButton = {
-                TextButton(onClick = { showExitDialog = false }) {
-                    Text("Cancel")
+            onConfirmExit = {
+                if (!isExiting) {
+                    isExiting = true
+                    coroutineScope.launch {
+                        // End active karaoke room session via website's existing mechanism and stop media
+                        webViewRef?.let { webView ->
+                            YimlyMediaShutdown.executeSessionLeaveAndMediaShutdown(webView)
+                        }
+                        // Allow brief grace period for network request to be sent
+                        delay(400L)
+                        // Finish activity and exit app cleanly
+                        (context as? Activity)?.finish()
+                    }
                 }
             }
         )
@@ -96,14 +120,131 @@ fun YimlyTvScreen(
         modifier = modifier.fillMaxSize(),
         color = YimlyDarkBg
     ) {
-        YimlyHostRoomContainer(hostRoomUrl = url)
+        YimlyHostRoomContainer(
+            hostRoomUrl = url,
+            onWebViewCreated = { webView ->
+                webViewRef = webView
+            },
+            onExitRequested = {
+                if (!isExiting) {
+                    showExitDialog = true
+                }
+            }
+        )
     }
+}
+
+@Composable
+fun YimlyExitDialog(
+    isExiting: Boolean,
+    onDismiss: () -> Unit,
+    onConfirmExit: () -> Unit
+) {
+    val cancelInteractionSource = remember { MutableInteractionSource() }
+    val isCancelFocused by cancelInteractionSource.collectIsFocusedAsState()
+
+    val confirmInteractionSource = remember { MutableInteractionSource() }
+    val isConfirmFocused by confirmInteractionSource.collectIsFocusedAsState()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier
+            .widthIn(min = 320.dp, max = 480.dp)
+            .testTag("exit_dialog"),
+        shape = RoundedCornerShape(24.dp),
+        containerColor = Color(0xFF1B1428),
+        tonalElevation = 6.dp,
+        title = {
+            Text(
+                text = stringResource(R.string.exit_dialog_title),
+                style = MaterialTheme.typography.titleLarge.copy(
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                ),
+                modifier = Modifier.testTag("exit_dialog_title")
+            )
+        },
+        text = {
+            Text(
+                text = stringResource(R.string.exit_dialog_message),
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 15.sp,
+                    color = Color(0xFFDCD6E5),
+                    lineHeight = 22.sp
+                ),
+                modifier = Modifier.testTag("exit_dialog_message")
+            )
+        },
+        dismissButton = {
+            Button(
+                onClick = onDismiss,
+                enabled = !isExiting,
+                interactionSource = cancelInteractionSource,
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isCancelFocused) Color.White else Color(0xFF282038),
+                    contentColor = if (isCancelFocused) Color(0xFF120D1D) else Color(0xFFE2DCED),
+                    disabledContainerColor = Color(0xFF201A2C),
+                    disabledContentColor = Color(0xFF7A708C)
+                ),
+                border = BorderStroke(
+                    width = if (isCancelFocused) 2.5.dp else 1.dp,
+                    color = if (isCancelFocused) YimlyPink else Color(0xFF3F3456)
+                ),
+                modifier = Modifier
+                    .focusable(interactionSource = cancelInteractionSource)
+                    .height(48.dp)
+                    .testTag("exit_dialog_cancel")
+            ) {
+                Text(
+                    text = stringResource(R.string.exit_dialog_cancel),
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirmExit,
+                enabled = !isExiting,
+                interactionSource = confirmInteractionSource,
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isConfirmFocused) Color.White else Color(0xFFE11D48),
+                    contentColor = if (isConfirmFocused) Color(0xFF881337) else Color.White,
+                    disabledContainerColor = Color(0xFF5A1626),
+                    disabledContentColor = Color(0xFF9F727D)
+                ),
+                border = BorderStroke(
+                    width = if (isConfirmFocused) 2.5.dp else 1.dp,
+                    color = if (isConfirmFocused) Color(0xFFFB7185) else Color(0xFFBE123C)
+                ),
+                modifier = Modifier
+                    .focusable(interactionSource = confirmInteractionSource)
+                    .height(48.dp)
+                    .testTag("exit_dialog_confirm")
+            ) {
+                Text(
+                    text = if (isExiting) "Leaving…" else stringResource(R.string.exit_dialog_confirm),
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                )
+            }
+        }
+    )
 }
 
 @Composable
 fun YimlyHostRoomContainer(
     hostRoomUrl: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onWebViewCreated: (WebView) -> Unit = {},
+    onExitRequested: () -> Unit = {}
 ) {
     var isPageLoaded by remember { mutableStateOf(false) }
 
@@ -116,6 +257,8 @@ fun YimlyHostRoomContainer(
         YimlyHostRoomWebView(
             url = hostRoomUrl,
             modifier = Modifier.fillMaxSize(),
+            onWebViewCreated = onWebViewCreated,
+            onExitRequested = onExitRequested,
             onPageStarted = {
                 // Page began loading
             },

@@ -5,4 +5,8 @@
     <string name="status_connecting">Connecting to Yimly server…</string>
     <string name="action_retry">Retry Now</string>
     <string name="label_session">Session: %1$s</string>
+    <string name="exit_dialog_title">Leave Yimly-TV?</string>
+    <string name="exit_dialog_message">Are you sure you want to leave? Your current karaoke session will end.</string>
+    <string name="exit_dialog_cancel">Cancel</string>
+    <string name="exit_dialog_confirm">Leave &amp; Exit</string>
 </resources>

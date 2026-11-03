@@ -28,11 +28,98 @@ import androidx.compose.ui.viewinterop.AndroidView
 
 private const val TAG = "YimlyWebView"
 
+/**
+ * Handles media shutdown and website session termination via the website's existing mechanisms.
+ */
+object YimlyMediaShutdown {
+    /**
+     * Pauses all audio and video elements on the page without modifying state or sessions.
+     */
+    const val PAUSE_MEDIA_JAVASCRIPT = """
+        (function() {
+            try {
+                document.querySelectorAll('video, audio').forEach(function(el) {
+                    try { el.pause(); } catch(e) {}
+                });
+            } catch(e) {}
+        })();
+    """
+
+    /**
+     * Ends the active karaoke room session using the website's existing UI and API methods,
+     * then halts all audio and video playback elements immediately.
+     */
+    const val END_SESSION_JAVASCRIPT = """
+        (async function() {
+            try {
+                // 1. If confirm button is already in DOM, click it to trigger website's native leave flow
+                var confirmBtn = document.querySelector('[data-tv-id="end-session-confirm"]');
+                if (confirmBtn) {
+                    confirmBtn.click();
+                } else {
+                    var endBtn = document.querySelector('[data-tv-id="session-info-end-session"]');
+                    if (endBtn) {
+                        endBtn.click();
+                        setTimeout(function() {
+                            var c = document.querySelector('[data-tv-id="end-session-confirm"]');
+                            if (c) c.click();
+                        }, 50);
+                    }
+                }
+
+                // 2. If on a room page, end session via the website's exact endpoint with same-origin credentials
+                var match = window.location.pathname.match(/\/rooms\/([^/?#]+)/);
+                if (match && match[1]) {
+                    var sid = match[1];
+                    try {
+                        await fetch('/api/karaoke/sessions/' + sid + '/end', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            credentials: 'same-origin'
+                        });
+                    } catch (err) {
+                        console.error('[Yimly-TV] Session end request error:', err);
+                    }
+                }
+            } catch (e) {
+                console.error('[Yimly-TV] Exit session error:', e);
+            } finally {
+                // 3. Stop all media playback elements
+                try {
+                    document.querySelectorAll('video, audio').forEach(function(el) {
+                        try {
+                            el.pause();
+                            el.currentTime = 0;
+                        } catch (e) {}
+                    });
+                } catch(e) {}
+            }
+        })();
+    """
+
+    fun executeSessionLeaveAndMediaShutdown(webView: WebView?, onCompleted: () -> Unit = {}) {
+        if (webView == null) {
+            onCompleted()
+            return
+        }
+        try {
+            webView.evaluateJavascript(END_SESSION_JAVASCRIPT) {
+                onCompleted()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error executing session leave JavaScript: ${e.message}")
+            onCompleted()
+        }
+    }
+}
+
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun YimlyHostRoomWebView(
     url: String,
     modifier: Modifier = Modifier,
+    onWebViewCreated: (WebView) -> Unit = {},
+    onExitRequested: () -> Unit = {},
     onPageStarted: () -> Unit = {},
     onPageFinished: () -> Unit = {},
     onError: (description: String) -> Unit = {}
@@ -42,42 +129,42 @@ fun YimlyHostRoomWebView(
     val webView = remember(context) {
         createConfiguredWebView(
             context = context,
+            onExitRequested = onExitRequested,
             onPageStarted = onPageStarted,
             onPageFinished = onPageFinished,
             onError = onError
         )
     }
 
+    DisposableEffect(webView) {
+        onWebViewCreated(webView)
+        onDispose { }
+    }
+
     DisposableEffect(lifecycleOwner) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             when (event) {
-                androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> webView.onPause()
-                androidx.lifecycle.Lifecycle.Event.ON_RESUME -> webView.onResume()
+                androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> {
+                    try {
+                        webView.evaluateJavascript(YimlyMediaShutdown.PAUSE_MEDIA_JAVASCRIPT, null)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error pausing media on ON_PAUSE: ${e.message}")
+                    }
+                    webView.onPause()
+                }
+                androidx.lifecycle.Lifecycle.Event.ON_RESUME -> {
+                    // Resume web engine without restarting playback
+                    webView.onResume()
+                }
                 else -> {}
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
-        }
-    }
-
-    DisposableEffect(url) {
-        Log.i(TAG, "Loading Host Room URL in WebView: $url")
-        webView.loadUrl(url)
-
-        onDispose {
             try {
-                webView.stopLoading()
-            } catch (e: Exception) {
-                Log.w(TAG, "Error stopping WebView: ${e.message}")
-            }
-        }
-    }
-
-    DisposableEffect(Unit) {
-        onDispose {
-            try {
+                webView.webChromeClient = null
+                webView.webViewClient = WebViewClient()
                 webView.stopLoading()
                 webView.loadUrl("about:blank")
                 webView.clearHistory()
@@ -89,6 +176,13 @@ fun YimlyHostRoomWebView(
         }
     }
 
+    DisposableEffect(url) {
+        Log.i(TAG, "Loading Host Room URL in WebView: $url")
+        webView.loadUrl(url)
+        onDispose { }
+    }
+
+    // AndroidView setup
     AndroidView(
         factory = { webView },
         modifier = modifier.fillMaxSize(),
@@ -102,10 +196,13 @@ fun YimlyHostRoomWebView(
 @SuppressLint("SetJavaScriptEnabled")
 private fun createConfiguredWebView(
     context: Context,
+    onExitRequested: () -> Unit,
     onPageStarted: () -> Unit,
     onPageFinished: () -> Unit,
     onError: (description: String) -> Unit
 ): WebView {
+    var isDestroyed = false
+
     return WebView(context).apply {
         layoutParams = ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -175,13 +272,17 @@ private fun createConfiguredWebView(
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                 super.onPageStarted(view, url, favicon)
                 Log.d(TAG, "Host room page started loading: $url")
-                onPageStarted()
+                if (!isDestroyed) {
+                    onPageStarted()
+                }
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 Log.i(TAG, "Host room page finished loading: $url")
-                onPageFinished()
+                if (!isDestroyed) {
+                    onPageFinished()
+                }
             }
 
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
@@ -200,7 +301,7 @@ private fun createConfiguredWebView(
                 val description = error?.description?.toString() ?: "WebView resource error"
                 val isMainFrame = request?.isForMainFrame == true
                 Log.w(TAG, "WebView error (mainFrame=$isMainFrame): $description on ${request?.url}")
-                if (isMainFrame) {
+                if (isMainFrame && !isDestroyed) {
                     onError(description)
                 }
             }
@@ -220,21 +321,19 @@ private fun createConfiguredWebView(
                 error: SslError?
             ) {
                 Log.w(TAG, "WebView SSL warning: $error")
-                // By default proceed or rely on standard handler
                 super.onReceivedSslError(view, handler, error)
             }
         }
 
         // Intercept TV remote back or media keys if necessary
         setOnKeyListener { _, keyCode, event ->
-            if (event.action == KeyEvent.ACTION_DOWN) {
-                when (keyCode) {
-                    KeyEvent.KEYCODE_BACK -> {
-                        if (canGoBack()) {
-                            goBack()
-                            return@setOnKeyListener true
-                        }
-                    }
+            if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_BACK) {
+                if (canGoBack()) {
+                    goBack()
+                    return@setOnKeyListener true
+                } else {
+                    onExitRequested()
+                    return@setOnKeyListener true
                 }
             }
             false
