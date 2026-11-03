@@ -36,7 +36,10 @@ class YimlyViewModel(
 
     init {
         // Every launch creates a fresh session automatically
-        createFreshSession()
+        viewModelScope.launch {
+            delay(5000L) // Wait for WebView to potentially set cookies
+            createFreshSession()
+        }
     }
 
     fun createFreshSession() {

@@ -49,8 +49,11 @@ class YimlySessionServiceImpl(
             .header("Accept", "application/json")
             .header("Content-Type", "application/json")
             .header("User-Agent", "YimlyTV/1.0 (Android TV; Leanback)")
+            .header("Referer", BASE_URL)
+            .header("X-Requested-With", "XMLHttpRequest")
             .apply {
                 val cookieString = android.webkit.CookieManager.getInstance().getCookie(BASE_URL)
+                Log.d("YimlySessionService", "CookieString: $cookieString")
                 if (!cookieString.isNullOrBlank()) {
                     header("Cookie", cookieString)
                 }
