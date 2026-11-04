@@ -59,13 +59,14 @@ import com.example.ui.theme.YimlyDarkBg
 import com.example.ui.theme.YimlyPink
 
 import android.app.Activity
+import android.util.Log
 import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.AlertDialog
 import androidx.compose.runtime.rememberCoroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -102,13 +103,33 @@ fun YimlyTvScreen(
                 if (!isExiting) {
                     isExiting = true
                     coroutineScope.launch {
-                        // End active karaoke room session via website's existing mechanism and stop media
+                        // 1. Await actual completion of session end or timeout
+                        val result = YimlyMediaShutdown.awaitSessionEndCompletion(webViewRef, timeoutMs = 3000L)
+                        Log.i("YimlyExit", "Session termination result: inRoom=${result.inRoom}, success=${result.success}, status=${result.status}, error=${result.error}")
+
+                        // 2. Stop all audio and video playback elements immediately
                         webViewRef?.let { webView ->
-                            YimlyMediaShutdown.executeSessionLeaveAndMediaShutdown(webView)
+                            try {
+                                webView.evaluateJavascript(YimlyMediaShutdown.PAUSE_MEDIA_JAVASCRIPT, null)
+                            } catch (e: Exception) {
+                                Log.w("YimlyExit", "Error pausing media on exit: ${e.message}")
+                            }
+
+                            // 3. Clean up and destroy WebView safely
+                            try {
+                                webView.webChromeClient = null
+                                webView.webViewClient = WebViewClient()
+                                webView.stopLoading()
+                                webView.loadUrl("about:blank")
+                                webView.clearHistory()
+                                webView.removeAllViews()
+                                webView.destroy()
+                            } catch (e: Exception) {
+                                Log.w("YimlyExit", "Error destroying WebView on exit: ${e.message}")
+                            }
                         }
-                        // Allow brief grace period for network request to be sent
-                        delay(400L)
-                        // Finish activity and exit app cleanly
+
+                        // 4. Finish activity and exit app cleanly
                         (context as? Activity)?.finish()
                     }
                 }

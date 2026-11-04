@@ -25,8 +25,24 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import org.json.JSONTokener
 
 private const val TAG = "YimlyWebView"
+
+/**
+ * Result of ending the karaoke session on the website.
+ */
+data class SessionEndResult(
+    val inRoom: Boolean,
+    val success: Boolean,
+    val status: Int,
+    val error: String? = null
+)
 
 /**
  * Handles media shutdown and website session termination via the website's existing mechanisms.
@@ -46,70 +62,123 @@ object YimlyMediaShutdown {
     """
 
     /**
-     * Ends the active karaoke room session using the website's existing UI and API methods,
-     * then halts all audio and video playback elements immediately.
+     * Initiates exactly one session-ending request using the verified POST endpoint directly.
+     * Does NOT click DOM buttons, preventing duplicate calls.
+     * Records completion status into window.__yimly_exit_status for Android retrieval.
      */
-    const val END_SESSION_JAVASCRIPT = """
-        (async function() {
-            try {
-                // 1. If confirm button is already in DOM, click it to trigger website's native leave flow
-                var confirmBtn = document.querySelector('[data-tv-id="end-session-confirm"]');
-                if (confirmBtn) {
-                    confirmBtn.click();
-                } else {
-                    var endBtn = document.querySelector('[data-tv-id="session-info-end-session"]');
-                    if (endBtn) {
-                        endBtn.click();
-                        setTimeout(function() {
-                            var c = document.querySelector('[data-tv-id="end-session-confirm"]');
-                            if (c) c.click();
-                        }, 50);
-                    }
+    const val START_SESSION_END_JAVASCRIPT = """
+        (function() {
+            window.__yimly_exit_status = null;
+            (async function() {
+                var match = window.location.pathname.match(/\/rooms\/([^/?#]+)/);
+                if (!match || !match[1]) {
+                    window.__yimly_exit_status = JSON.stringify({
+                        inRoom: false,
+                        success: true,
+                        status: 200,
+                        error: null
+                    });
+                    return;
                 }
 
-                // 2. If on a room page, end session via the website's exact endpoint with same-origin credentials
-                var match = window.location.pathname.match(/\/rooms\/([^/?#]+)/);
-                if (match && match[1]) {
-                    var sid = match[1];
-                    try {
-                        await fetch('/api/karaoke/sessions/' + sid + '/end', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            credentials: 'same-origin'
-                        });
-                    } catch (err) {
-                        console.error('[Yimly-TV] Session end request error:', err);
-                    }
-                }
-            } catch (e) {
-                console.error('[Yimly-TV] Exit session error:', e);
-            } finally {
-                // 3. Stop all media playback elements
+                var sid = match[1];
                 try {
-                    document.querySelectorAll('video, audio').forEach(function(el) {
-                        try {
-                            el.pause();
-                            el.currentTime = 0;
-                        } catch (e) {}
+                    var response = await fetch('/api/karaoke/sessions/' + encodeURIComponent(sid) + '/end', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'same-origin'
                     });
-                } catch(e) {}
-            }
+                    window.__yimly_exit_status = JSON.stringify({
+                        inRoom: true,
+                        success: response.ok,
+                        status: response.status,
+                        error: response.ok ? null : ('HTTP error ' + response.status)
+                    });
+                } catch (err) {
+                    window.__yimly_exit_status = JSON.stringify({
+                        inRoom: true,
+                        success: false,
+                        status: 0,
+                        error: (err && err.message) ? err.message : 'Network error'
+                    });
+                }
+            })();
         })();
     """
 
-    fun executeSessionLeaveAndMediaShutdown(webView: WebView?, onCompleted: () -> Unit = {}) {
-        if (webView == null) {
-            onCompleted()
-            return
+    fun parseSessionEndResult(rawValue: String?): SessionEndResult? {
+        if (rawValue.isNullOrBlank() || rawValue == "null" || rawValue == "\"null\"") {
+            return null
         }
         try {
-            webView.evaluateJavascript(END_SESSION_JAVASCRIPT) {
-                onCompleted()
+            var jsonStr = rawValue.trim()
+            if (jsonStr.startsWith("\"") && jsonStr.endsWith("\"") && jsonStr.length >= 2) {
+                jsonStr = JSONTokener(jsonStr).nextValue().toString()
             }
+            val json = JSONObject(jsonStr)
+            return SessionEndResult(
+                inRoom = json.optBoolean("inRoom", false),
+                success = json.optBoolean("success", false),
+                status = json.optInt("status", 0),
+                error = if (json.has("error") && !json.isNull("error")) json.getString("error") else null
+            )
         } catch (e: Exception) {
-            Log.w(TAG, "Error executing session leave JavaScript: ${e.message}")
-            onCompleted()
+            return null
         }
+    }
+
+    suspend fun awaitSessionEndCompletion(
+        webView: WebView?,
+        timeoutMs: Long = 3000L,
+        pollIntervalMs: Long = 50L
+    ): SessionEndResult = withContext(Dispatchers.Main) {
+        if (webView == null) {
+            return@withContext SessionEndResult(
+                inRoom = false,
+                success = true,
+                status = 200,
+                error = null
+            )
+        }
+
+        try {
+            webView.evaluateJavascript(START_SESSION_END_JAVASCRIPT, null)
+        } catch (e: Exception) {
+            Log.w(TAG, "Error initiating session end: ${e.message}")
+            return@withContext SessionEndResult(
+                inRoom = false,
+                success = false,
+                status = 0,
+                error = e.message
+            )
+        }
+
+        val startTime = System.currentTimeMillis()
+        while (System.currentTimeMillis() - startTime < timeoutMs) {
+            val deferred = CompletableDeferred<SessionEndResult?>()
+            try {
+                webView.evaluateJavascript("window.__yimly_exit_status") { rawValue ->
+                    deferred.complete(parseSessionEndResult(rawValue))
+                }
+            } catch (e: Exception) {
+                deferred.complete(null)
+            }
+
+            val result = deferred.await()
+            if (result != null) {
+                return@withContext result
+            }
+
+            delay(pollIntervalMs)
+        }
+
+        Log.w(TAG, "Timed out waiting for session end after ${timeoutMs}ms")
+        SessionEndResult(
+            inRoom = true,
+            success = false,
+            status = -1,
+            error = "Timeout after ${timeoutMs}ms"
+        )
     }
 }
 
