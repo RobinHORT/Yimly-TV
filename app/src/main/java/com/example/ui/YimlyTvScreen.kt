@@ -99,12 +99,12 @@ fun YimlyTvScreen(
                     showExitDialog = false
                 }
             },
-            onConfirmExit = {
+             onConfirmExit = {
                 if (!isExiting) {
                     isExiting = true
                     coroutineScope.launch {
-                        // 1. Await actual completion of session end or timeout
-                        val result = YimlyMediaShutdown.awaitSessionEndCompletion(webViewRef, timeoutMs = 3000L)
+                        // 1. Await actual completion of session end or 5-second timeout
+                        val result = YimlyMediaShutdown.awaitSessionEndCompletion(webViewRef, timeoutMs = 5000L)
                         Log.i("YimlyExit", "Session termination result: inRoom=${result.inRoom}, success=${result.success}, status=${result.status}, error=${result.error}")
 
                         // 2. Stop all audio and video playback elements immediately
@@ -114,22 +114,9 @@ fun YimlyTvScreen(
                             } catch (e: Exception) {
                                 Log.w("YimlyExit", "Error pausing media on exit: ${e.message}")
                             }
-
-                            // 3. Clean up and destroy WebView safely
-                            try {
-                                webView.webChromeClient = null
-                                webView.webViewClient = WebViewClient()
-                                webView.stopLoading()
-                                webView.loadUrl("about:blank")
-                                webView.clearHistory()
-                                webView.removeAllViews()
-                                webView.destroy()
-                            } catch (e: Exception) {
-                                Log.w("YimlyExit", "Error destroying WebView on exit: ${e.message}")
-                            }
                         }
 
-                        // 4. Finish activity and exit app cleanly
+                        // 3. Finish activity and exit app cleanly (DisposableEffect owns WebView destruction)
                         (context as? Activity)?.finish()
                     }
                 }
