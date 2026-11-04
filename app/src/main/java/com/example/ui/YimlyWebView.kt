@@ -29,6 +29,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import org.json.JSONTokener
 
@@ -129,7 +130,7 @@ object YimlyMediaShutdown {
 
     suspend fun awaitSessionEndCompletion(
         webView: WebView?,
-        timeoutMs: Long = 3000L,
+        timeoutMs: Long = 5000L,
         pollIntervalMs: Long = 50L
     ): SessionEndResult = withContext(Dispatchers.Main) {
         if (webView == null) {
@@ -153,23 +154,33 @@ object YimlyMediaShutdown {
             )
         }
 
-        val startTime = System.currentTimeMillis()
-        while (System.currentTimeMillis() - startTime < timeoutMs) {
-            val deferred = CompletableDeferred<SessionEndResult?>()
-            try {
-                webView.evaluateJavascript("window.__yimly_exit_status") { rawValue ->
-                    deferred.complete(parseSessionEndResult(rawValue))
+        val result = withTimeoutOrNull(timeoutMs) {
+            while (true) {
+                val deferred = CompletableDeferred<SessionEndResult?>()
+                try {
+                    webView.evaluateJavascript("window.__yimly_exit_status") { rawValue ->
+                        deferred.complete(parseSessionEndResult(rawValue))
+                    }
+                } catch (e: Exception) {
+                    deferred.complete(null)
                 }
-            } catch (e: Exception) {
-                deferred.complete(null)
-            }
 
-            val result = deferred.await()
-            if (result != null) {
-                return@withContext result
-            }
+                val parsed = withTimeoutOrNull(pollIntervalMs * 4) {
+                    deferred.await()
+                }
 
-            delay(pollIntervalMs)
+                if (parsed != null) {
+                    return@withTimeoutOrNull parsed
+                }
+
+                delay(pollIntervalMs)
+            }
+            @Suppress("UNREACHABLE_CODE")
+            SessionEndResult(inRoom = true, success = false, status = -1, error = "Unreachable")
+        }
+
+        if (result != null) {
+            return@withContext result
         }
 
         Log.w(TAG, "Timed out waiting for session end after ${timeoutMs}ms")

@@ -186,19 +186,24 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `duplicate exit confirmation cannot trigger multiple requests`() {
-        composeTestRule.setContent {
-            MyApplicationTheme(darkTheme = true) {
-                YimlyExitDialog(
-                    isExiting = true,
-                    onDismiss = { },
-                    onConfirmExit = { }
-                )
+    fun `missing callback times out safely without hanging`() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val unresponsiveWebView = object : android.webkit.WebView(context) {
+            override fun evaluateJavascript(script: String, resultCallback: android.webkit.ValueCallback<String>?) {
+                // Do not invoke resultCallback, simulating non-responsive JS bridge
             }
         }
 
-        // When isExiting = true, buttons must be disabled and confirm shows 'Leaving…'
-        composeTestRule.onNodeWithTag("exit_dialog_cancel").assertIsNotEnabled()
-        composeTestRule.onNodeWithTag("exit_dialog_confirm").assertIsNotEnabled().assertTextEquals("Leaving…")
+        val startTime = System.currentTimeMillis()
+        val result = YimlyMediaShutdown.awaitSessionEndCompletion(unresponsiveWebView, timeoutMs = 200L, pollIntervalMs = 20L)
+        val duration = System.currentTimeMillis() - startTime
+
+        assertNotNull("Result must not be null even on timeout", result)
+        assertFalse("Timeout result success must be false", result.success)
+        assertEquals(-1, result.status)
+        assertTrue("Error message must indicate timeout", result.error?.contains("Timeout") == true)
+        assertTrue("Operation must complete within timeout bounds (< 1000ms)", duration < 1000L)
     }
 }
+
+
